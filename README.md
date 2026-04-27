@@ -1,113 +1,161 @@
-# Desafio Técnico - Cientista de Dados Pleno - Squad WhatsApp
+# Solução - Desafio Técnico Cientista de Dados (Squad WhatsApp)
+
+Este repositório contém minha solução para o case técnico com foco em:
+
+- análise de qualidade de fontes de telefone;
+- modelagem de ranking de sistemas;
+- algoritmo de priorização dos 2 melhores telefones por CPF;
+- proposta de validação via experimento A/B.
+
+O principal artefato é o notebook:
+
+- `case-ds-pleno.ipynb`
 
 ---
 
-## Contexto
+## 1) Abordagem
 
-Na Prefeitura do Rio, enviamos milhares de mensagens por mês via WhatsApp. Cada disparo tem um custo e as janelas de comunicação com o cidadão são preciosas. 
+### 1.1 Preparação dos dados
 
-O **Registro Municipal Integrado (RMI)** consolida dados de múltiplos sistemas (Saúde, Educação, Assistência Social, IPTU, etc.). Um desafio crítico é a **Multiplicidade**: um mesmo cidadão pode ter vários telefones vinculados a ele, muitas vezes antigos ou desatualizados. 
+Foram usadas duas bases mascaradas:
 
-Como Cientista de Dados no Squad WhatsApp, seu objetivo é criar a **Inteligência de Escolha**: identificar quais fontes de dados são mais confiáveis ("quentes") para garantir que mensagens críticas cheguem ao cidadão de forma eficiente e com menor custo.
+- `whatsapp_base_disparo_mascarado` (histórico de disparos);
+- `whatsapp_dim_telefone_mascarado` (dimensão de telefones e aparições por sistema).
+
+Passos principais de tratamento:
+
+1. Explosão de `telefone_aparicoes` para recuperar `id_sistema_mask` e `registro_data_atualizacao`;
+2. Agrupamento por `telefone_numero` e `id_sistema_mask` para evitar inflar volumes, selecionando `registro_data_atualizacao` mais recente;
+3. Junção da base de disparo com a dimensão por telefone;
+4. Construção de flags de sucesso para cálculo de taxas;
+5. Cálculo de recência (`dias_desde_atualizacao`) para análise de decaimento.
+
+### 1.2 Parte 1 - Qualidade de fontes
+
+Foi realizada a comparação de desempenho por sistema de origem e o estudo de decaimento por janela de atualização.
+
+Para reduzir viés por baixo volume, a taxa de sucesso por sistema foi suavizada via ajuste bayesiano:
+
+$$
+\text{taxaajustada} = \frac{\text{sucessos} + \alpha \cdot \bar{p}}{\text{tentativas} + \alpha}
+$$
+
+onde:
+
+- $\bar{p}$ = taxa global;
+- $\alpha$ = força do prior.
+
+### 1.3 Parte 2.1 - Ranking de sistemas
+
+O ranking foi definido com dois componentes:
+
+- `score_origem`: taxa suavizada por Bayes;
+- `score_atualidade`: fator de recência por sistema.
+
+Regra adotada para atualidade:
+
+- até 180 dias: score 1.0;
+- acima de 180 dias: decaimento exponencial com meia-vida anual.
+
+Score final do sistema:
+
+$$
+\text{scoresistema} = 100 \cdot \text{scoreorigem} \cdot \text{scoreatualidade}
+$$
+
+### 1.4 Parte 2.2 - Algoritmo de escolha de telefones
+
+No nível telefone, o algoritmo usa:
+
+- `score_sistema` (já contendo origem + atualidade);
+- fator de qualidade (`telefone_qualidade`: VALIDO, SUSPEITO, INVALIDO);
+- `score_ddd` com suavização por volume.
+
+Probabilidade por aparição:
+
+$$
+\text{paparicao} =
+\left(\frac{\text{scoresistema}}{100}\right)
+\cdot \text{fatorqualidade}
+\cdot \text{scoreddd}
+$$
+
+Depois, há consolidação por `cpf + contato_telefone`, bônus leve por multissistema e seleção dos 2 melhores por CPF.
+
+### 1.5 Parte 3 - Desenho do experimento A/B
+
+A validação proposta compara:
+
+- controle: estratégia atual;
+- teste: priorização por score.
+
+Com definição de:
+
+- hipótese nula e alternativa
+  - H0: taxa de sucesso da nova estratégica é igual
+- métrica primária (taxa de sucesso/entrega);
+- métricas secundárias (ex.: custo por entrega);
+- estimativa de tamanho de amostra e duração.
 
 ---
 
-## Instruções
+## 2) Premissas
 
-1. Faça um fork do repositório do desafio para colocar a sua solução
-2. Use **Jupyter Notebooks** (.ipynb) bem documentados ou scripts Python/SQL
-3. Inclua **README.md** explicando sua abordagem, premissas e como reproduzir
-4. **Entrega**: Envie o link do repositório para `selecao.pcrj@gmail.com`
+As principais premissas adotadas no notebook:
+
+1. A taxa de sucesso observada no histórico é um bom proxy de “telefone quente”;
+2. Bases com pouco volume exigem suavização estatística para evitar conclusões instáveis;
+3. Atualidade da informação é relevante para ranking de fonte;
+4. Qualidade declarada do telefone e sinal regional (DDD) agregam poder de priorização;
+5. Para operação, priorizar top-2 por CPF é um bom compromisso entre cobertura e custo.
 
 ---
 
-## Dados
+## 3) Como reproduzir
 
-Você terá acesso a duas tabelas principais mascaradas para garantir anonimato e consistência:
+### 3.1 Requisitos
 
-### 1. Tabela de Performance: `base_disparo_mascarado`
-Histórico real de disparos efetuados pelo motor de mensagens.
+- Python 3.10+ (ou Anaconda equivalente)
+- Jupyter Notebook / JupyterLab
+- Dependências:
+  - `pandas`
+  - `numpy`
+  - `matplotlib`
 
-### 2. Tabela de Dimensão: `dim_telefone_mascarado`
-Conhecimento consolidado sobre os telefones e suas origens.
+Instalação sugerida:
 
-
-**⚠️ DISCLAIMER SOBRE VIESES**: Algumas bases de dados já são consideradas "mais quentes" pela Prefeitura e aparecem com maior frequência nos logs. Identifique se uma base performa melhor porque é realmente superior ou se os números estão inflados pelo volume de tentativas (viés de seleção).
-
-### Acesso aos dados
-
-Os arquivos Parquet estão disponíveis no bucket GCS:
-
+```bash
+pip install pandas numpy matplotlib jupyter
 ```
-https://console.cloud.google.com/storage/browser/case_vagas/whatsapp
-```
----
 
-## Parte 1: Análise Exploratória e Qualidade de Fontes
+### 3.2 Dados
 
-**O objetivo aqui é medir o "calor" de cada sistema de origem.**
+Os arquivos parquet devem estar no diretório raiz do projeto com os nomes:
 
-### 1. Desestruturação e Correlação
-Um telefone pode ter vindo de vários sistemas. Use seus conhecimentos para correlacionar cada sistema de origem (`id_sistema_mask`) com a performance real nos disparos (`status_disparo`).
+- `whatsapp_base_disparo_mascarado`
+- `whatsapp_dim_telefone_mascarado`
 
-**Entregue**: Análise comparativa de taxas de entrega (`DELIVERED`) agregadas por sistema de origem.
+### 3.3 Execução
 
-### 2. Janela de Atualidade
-Investigue se o tempo decorrido desde a última atualização do telefone no sistema de origem (`registro_data_atualizacao`) impacta na chance de sucesso do disparo.
-
-**Entregue**: Análise de "decaimento" da qualidade do dado ao longo do tempo. Existe um "prazo de validade" para um telefone ser considerado quente?
-
----
-
-## Parte 2: Inteligência de Priorização
-
-**O objetivo aqui é criar a regra de negócio que o motor de disparos seguirá.**
-
-### 3. Ranking de Sistemas
-Com base nas análises anteriores, crie um ranking de confiabilidade para os sistemas da Prefeitura. 
-
-**Entregue**: Tabela ou Score de ranking das fontes. Explique matematicamente por que o sistema X é melhor que o sistema Y.
-
-### 4. Algoritmo de Escolha
-
-Imagine que você tem 3 telefones diferentes para o mesmo CPF. Proponha um algoritmo (score ou ranking) que escolha automaticamente os **dois melhores** para receberem a mensagem.
-
-**Entregue**: Explicação da lógica do algoritmo. Como você combina a "origem do dado" com a "data de atualização" e o "DDD" para tomar essa decisão?
+1. Abra o notebook:
+  - `case-ds-pleno.ipynb`
+2. Execute as células em ordem (`Run All`).
+3. Verifique as saídas de:
+  - ranking de sistemas (`ranking_sistemas`);
+  - tabela de candidatos e seleção `top2_por_cpf`;
+  - seção do experimento A/B.
 
 ---
 
-## Parte 3: Desenho de Experimento
+## 4) Estrutura de entrega
 
-### 5. Proposta de Teste A/B
-Como você validaria que seu novo ranking é realmente melhor do que a estratégia de envio aleatório (ou baseada em ordem alfabética) que usamos hoje?
-
-**Entregue**: Desenho do experimento. Defina hipótese nula, métricas primárias e secundárias, tamanho de amostra e tempo de duração estimado para o teste.
+- `case-ds-pleno.ipynb`: solução principal.
+- `README.md`: abordagem, premissas e reprodução.
 
 ---
 
-## Avaliação
+## 5) Observações finais
 
-Você será avaliado nos seguintes critérios:
+- A solução prioriza transparência de regra de negócio e interpretabilidade.
+- Os pesos e parâmetros (prior bayesiano, meia-vida, bônus multissistema) podem ser calibrados com validação online (A/B) e monitoramento contínuo.
 
-- **Manipulação de Dados (SQL/Python)**: Capacidade de lidar com arrays e joins complexos.
-- **Raciocínio Analítico e Estatístico**: Tratamento de vieses e solidez na definição de métricas.
-- **Visão de Negócio e Impacto**: Tradução da análise em uma regra de negócio acionável.
-- **Comunicação e Visualização**: Clareza na apresentação dos resultados.
-
----
-
-## FAQ
-
-**1. O que define um telefone "quente"?**
-Aquele que tem maior probabilidade de estar ativo, ser entregue e lido pelo cidadão correto.
-
-**2. Posso usar ferramentas de BI?**
-Sim, mas o core da análise e a lógica do algoritmo devem estar documentados no repositório.
-
----
-
-## Contato
-
-Dúvidas? Mande um e-mail para `patricia.catandi@prefeitura.rio` com o título começando com `[CASE DS]` 
-
-Boa sorte! 🚀
